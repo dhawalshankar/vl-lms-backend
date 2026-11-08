@@ -216,22 +216,35 @@ def get_instructor_sales(
         .all()
     )
 
-    paid_sales = (
-        db.query(
-            Payment.course_id.label("course_id"),
-            func.count(func.distinct(Payment.user_id)).label("sales_count"),
-            func.coalesce(func.sum(Payment.amount), 0).label("total_revenue"),
-            func.min(Payment.currency).label("currency"),
+    paid_sales = []
+    if courses:
+        # One row per (course, student): duplicate paid rows for the same
+        # student collapse into one, so "sold" and revenue are both per student.
+        per_student = (
+            db.query(
+                Payment.course_id.label("course_id"),
+                Payment.user_id.label("user_id"),
+                func.max(Payment.amount).label("amount"),
+                func.min(Payment.currency).label("currency"),
+            )
+            .filter(
+                Payment.status == "paid",
+                Payment.course_id.in_([course.id for course in courses]),
+            )
+            .group_by(Payment.course_id, Payment.user_id)
+            .subquery()
         )
-        .filter(
-            Payment.status == "paid",
-            Payment.course_id.in_([course.id for course in courses]),
+
+        paid_sales = (
+            db.query(
+                per_student.c.course_id.label("course_id"),
+                func.count().label("sales_count"),
+                func.coalesce(func.sum(per_student.c.amount), 0).label("total_revenue"),
+                func.min(per_student.c.currency).label("currency"),
+            )
+            .group_by(per_student.c.course_id)
+            .all()
         )
-        .group_by(Payment.course_id)
-        .all()
-        if courses
-        else []
-    )
     sales_by_course = {row.course_id: row for row in paid_sales}
 
     course_sales = [
