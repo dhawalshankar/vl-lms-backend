@@ -413,22 +413,25 @@ def list_enrollment_financials(
         .group_by(Module.course_id)
         .all()
     )
-    completed_totals = dict(
-        db.query(
-            LessonProgress.user_id,
-            Module.course_id,
-            func.count(distinct(LessonProgress.lesson_id)),
+    completed_totals = {
+        (user_id, progress_course_id): completed_count
+        for user_id, progress_course_id, completed_count in (
+            db.query(
+                LessonProgress.user_id,
+                Module.course_id,
+                func.count(distinct(LessonProgress.lesson_id)),
+            )
+            .join(Lesson, Lesson.id == LessonProgress.lesson_id)
+            .join(Module, Module.id == Lesson.module_id)
+            .filter(
+                LessonProgress.user_id.in_(student_ids),
+                Module.course_id.in_(course_ids),
+                LessonProgress.is_completed.is_(True),
+            )
+            .group_by(LessonProgress.user_id, Module.course_id)
+            .all()
         )
-        .join(Lesson, Lesson.id == LessonProgress.lesson_id)
-        .join(Module, Module.id == Lesson.module_id)
-        .filter(
-            LessonProgress.user_id.in_(student_ids),
-            Module.course_id.in_(course_ids),
-            LessonProgress.is_completed.is_(True),
-        )
-        .group_by(LessonProgress.user_id, Module.course_id)
-        .all()
-    )
+    }
 
     result = []
     for enrollment, student, course, instructor in enrollment_rows:
