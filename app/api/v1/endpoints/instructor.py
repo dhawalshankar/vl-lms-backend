@@ -38,7 +38,7 @@ def _own_out(profile: InstructorProfile) -> InstructorProfileOut:
         bio=profile.bio,
         languages=profile.languages or ["Hindi", "English"],
         experienceYears=profile.experience_years,
-        avatarUrl=profile.avatar_url or "",
+        avatarUrl=profile.avatar_url or (profile.user.avatar_url if profile.user else "") or "",
         twitter=profile.twitter or "",
         linkedin=profile.linkedin or "",
         youtube=profile.youtube or "",
@@ -57,7 +57,7 @@ def _public_out(profile: InstructorProfile) -> InstructorPublicOut:
         bio=profile.bio,
         languages=profile.languages or ["Hindi", "English"],
         experienceYears=profile.experience_years,
-        avatarUrl=profile.avatar_url or "",
+        avatarUrl=profile.avatar_url or (profile.user.avatar_url if profile.user else "") or "",
         twitter=profile.twitter or "",
         linkedin=profile.linkedin or "",
         youtube=profile.youtube or "",
@@ -152,7 +152,10 @@ def save_instructor_profile(
         .first()
     )
 
-    avatar = (payload.avatarUrl or "").strip() or None  # empty = clear the photo
+    if payload.avatarUrl is None:
+        avatar = (profile.avatar_url if profile else None) or current_user.avatar_url
+    else:
+        avatar = payload.avatarUrl.strip() or None  # empty = clear the photo
 
     if not profile:
         profile = InstructorProfile(
@@ -190,8 +193,7 @@ def save_instructor_profile(
 
     # Keep user's full_name and avatar synced
     current_user.full_name = payload.name
-    if avatar:
-        current_user.avatar_url = avatar
+    current_user.avatar_url = avatar
 
     db.commit()
     db.refresh(profile)

@@ -35,7 +35,7 @@ class InstructorProfileIn(BaseModel):
     bio: str = Field("Passionate about making Indian regional languages accessible.", max_length=2000)
     languages: List[str] = ["Hindi", "English"]
     experienceYears: int = Field(5, ge=0, le=80)
-    avatarUrl: Optional[str] = ""  # Text column: no length cap (Google photo URLs are long)
+    avatarUrl: Optional[str] = None  # None = preserve existing photo; "" = clear it
     twitter: Optional[str] = Field("", max_length=255)
     linkedin: Optional[str] = Field("", max_length=255)
     youtube: Optional[str] = Field("", max_length=255)
