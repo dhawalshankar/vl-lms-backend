@@ -1,3 +1,4 @@
+# app/api/v1/endpoints/payments.py
 import hashlib
 import hmac
 from decimal import Decimal
@@ -11,6 +12,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.course import Course
+from app.models.enrollment import Enrollment
 from app.models.payment import Payment
 from app.models.user import User
 from app.schemas.payment import (
@@ -49,6 +51,32 @@ def create_order(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot purchase an unpublished course.",
+        )
+
+    # Block a second purchase: this user already has a paid payment for this course,
+    # or is already enrolled (e.g. enrolled manually by an admin).
+    already_paid = (
+        db.query(Payment.id)
+        .filter(
+            Payment.user_id == current_user.id,
+            Payment.course_id == course.id,
+            Payment.status == "paid",
+        )
+        .first()
+    )
+    already_enrolled = (
+        db.query(Enrollment.id)
+        .filter(
+            Enrollment.user_id == current_user.id,
+            Enrollment.course_id == course.id,
+            Enrollment.status != "cancelled",
+        )
+        .first()
+    )
+    if already_paid is not None or already_enrolled is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You have already purchased this course.",
         )
 
     amount_paise = int((course.price * Decimal("100")).to_integral_value())
