@@ -1,4 +1,5 @@
 # app/schemas/instructor.py
+from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 from pydantic import (
@@ -81,3 +82,23 @@ class InstructorPublicOut(_ProfileFields):
     """Public instructor page. NEVER add payout details or commission here."""
 
     userId: UUID = Field(validation_alias=AliasChoices("user_id", "userId"))
+
+
+class InstructorSalesCourseOut(BaseModel):
+    """Aggregate sales for one course. Contains no student or payment identity data."""
+
+    courseId: UUID
+    courseTitle: str
+    coursePrice: Decimal
+    currency: str
+    salesCount: int
+    totalRevenue: Decimal
+
+
+class InstructorSalesOut(BaseModel):
+    """The authenticated instructor's aggregate course sales."""
+
+    totalCourses: int
+    totalSales: int
+    totalRevenue: Decimal
+    courses: List[InstructorSalesCourseOut]

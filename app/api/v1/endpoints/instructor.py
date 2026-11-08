@@ -1,19 +1,24 @@
 # app/api/v1/endpoints/instructor.py
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_current_user, require_role
 from app.core.database import get_db
 from app.models.course import Course
 from app.models.instructor import InstructorProfile
+from app.models.payment import Payment
 from app.models.user import User
 from app.schemas.instructor import (
     InstructorProfileIn,
     InstructorProfileOut,
     InstructorPublicOut,
+    InstructorSalesCourseOut,
+    InstructorSalesOut,
 )
 
 router = APIRouter()
@@ -192,3 +197,72 @@ def save_instructor_profile(
     db.refresh(profile)
 
     return _own_out(profile)
+
+
+@router.get(
+    "/sales",
+    response_model=InstructorSalesOut,
+    summary="Get aggregate sales for the authenticated instructor's courses",
+)
+def get_instructor_sales(
+    current_user: User = Depends(require_role(["instructor", "admin"])),
+    db: Session = Depends(get_db),
+) -> InstructorSalesOut:
+    """Return course sales totals without exposing any student information."""
+    courses = (
+        db.query(Course)
+        .filter(Course.instructor_id == current_user.id)
+        .order_by(Course.title)
+        .all()
+    )
+
+    paid_sales = (
+        db.query(
+            Payment.course_id.label("course_id"),
+            func.count(func.distinct(Payment.user_id)).label("sales_count"),
+            func.coalesce(func.sum(Payment.amount), 0).label("total_revenue"),
+            func.min(Payment.currency).label("currency"),
+        )
+        .filter(
+            Payment.status == "paid",
+            Payment.course_id.in_([course.id for course in courses]),
+        )
+        .group_by(Payment.course_id)
+        .all()
+        if courses
+        else []
+    )
+    sales_by_course = {row.course_id: row for row in paid_sales}
+
+    course_sales = [
+        InstructorSalesCourseOut(
+            courseId=course.id,
+            courseTitle=course.title,
+            coursePrice=course.price,
+            currency=(
+                sales_by_course[course.id].currency
+                if course.id in sales_by_course
+                else "INR"
+            ),
+            salesCount=(
+                sales_by_course[course.id].sales_count
+                if course.id in sales_by_course
+                else 0
+            ),
+            totalRevenue=(
+                sales_by_course[course.id].total_revenue
+                if course.id in sales_by_course
+                else Decimal("0.00")
+            ),
+        )
+        for course in courses
+    ]
+
+    return InstructorSalesOut(
+        totalCourses=len(course_sales),
+        totalSales=sum(course.salesCount for course in course_sales),
+        totalRevenue=sum(
+            (course.totalRevenue for course in course_sales), Decimal("0.00")
+        ),
+        courses=course_sales,
+    )

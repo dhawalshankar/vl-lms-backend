@@ -76,6 +76,13 @@ The API is mounted under `/api/v1`. The available route groups are:
 | `/careers` | Job postings and applications |
 | `/admin` | Administrative operations and analytics |
 
+Instructor sales reporting:
+
+- `GET /api/v1/instructor/sales` (instructor or admin bearer token) returns the
+  authenticated instructor's course names, prices, distinct successful purchaser
+  counts, and total paid revenue. It intentionally excludes student identity,
+  enrollment details, and payment identifiers.
+
 Admin enrollment reporting endpoints (all require an admin bearer token):
 
 - `GET /api/v1/admin/instructor-enrollments` returns one row per instructor/course with
