@@ -119,4 +119,7 @@ class AdminEnrollmentFinancialOut(BaseModel):
     instructor_id: UUID
     instructor_name: str
     course_price: Decimal
+    progress_percentage: float
+    completed_lessons: int
+    total_lessons: int
     payments: List[AdminPaymentOut]

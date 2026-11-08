@@ -404,9 +404,42 @@ def list_enrollment_financials(
     for payment in payments:
         payments_by_key.setdefault((payment.user_id, payment.course_id), []).append(payment)
 
+    course_ids = {course.id for _, _, course, _ in enrollment_rows}
+    student_ids = {student.id for _, student, _, _ in enrollment_rows}
+    lesson_totals = dict(
+        db.query(Module.course_id, func.count(Lesson.id))
+        .join(Lesson, Lesson.module_id == Module.id)
+        .filter(Module.course_id.in_(course_ids))
+        .group_by(Module.course_id)
+        .all()
+    )
+    completed_totals = dict(
+        db.query(
+            LessonProgress.user_id,
+            Module.course_id,
+            func.count(distinct(LessonProgress.lesson_id)),
+        )
+        .join(Lesson, Lesson.id == LessonProgress.lesson_id)
+        .join(Module, Module.id == Lesson.module_id)
+        .filter(
+            LessonProgress.user_id.in_(student_ids),
+            Module.course_id.in_(course_ids),
+            LessonProgress.is_completed.is_(True),
+        )
+        .group_by(LessonProgress.user_id, Module.course_id)
+        .all()
+    )
+
     result = []
     for enrollment, student, course, instructor in enrollment_rows:
         course_payments = payments_by_key.get((student.id, course.id), [])
+        total_lessons = lesson_totals.get(course.id, 0)
+        completed_lessons = completed_totals.get((student.id, course.id), 0)
+        progress_percentage = (
+            round(completed_lessons / total_lessons * 100, 1)
+            if total_lessons
+            else 0.0
+        )
         result.append(
             AdminEnrollmentFinancialOut(
                 enrollment_id=enrollment.id,
@@ -421,6 +454,9 @@ def list_enrollment_financials(
                 instructor_id=course.instructor_id,
                 instructor_name=instructor.full_name,
                 course_price=course.price or 0,
+                progress_percentage=progress_percentage,
+                completed_lessons=completed_lessons,
+                total_lessons=total_lessons,
                 payments=[
                     AdminPaymentOut(
                         id=payment.id,

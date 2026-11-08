@@ -85,7 +85,8 @@ Admin enrollment reporting endpoints (all require an admin bearer token):
   enrollment status/date, instructor/course information, and all related Razorpay payment
   records (`razorpay_order_id`, `razorpay_payment_id`, amount, currency, and status). Use
   `instructor_id`, `course_id`, `enrollment_status`, `search`, `skip`, and `limit` filters
-  for refund investigation and pagination.
+  for refund investigation and pagination. Each row also includes `progress_percentage`,
+  `completed_lessons`, and `total_lessons`, calculated from the student's lesson progress.
 
 Interactive API documentation is generated from the application:
 
