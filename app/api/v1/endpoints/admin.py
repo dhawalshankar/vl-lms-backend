@@ -4,8 +4,8 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, distinct, func
-from sqlalchemy.orm import Session
+from sqlalchemy import case, distinct, func, tuple_
+from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import require_role
 from app.api.v1.endpoints.courses import create_course_record, get_course_detail, mark_published
@@ -17,7 +17,10 @@ from app.models.user import User
 from app.schemas.admin import (
     AdminCourseCreate,
     AdminCourseOut,
+    AdminEnrollmentFinancialOut,
     AdminInstructorOut,
+    AdminInstructorEnrollmentOut,
+    AdminPaymentOut,
     AdminStatsOut,
     AdminUserOut,
     CourseRejectIn,
@@ -250,6 +253,189 @@ def list_courses(
         query = query.filter(Course.status == status)
     rows = query.order_by(Course.created_at.desc()).all()
     return [_course_row_out(r) for r in rows]
+
+
+@router.get(
+    "/instructor-enrollments",
+    response_model=List[AdminInstructorEnrollmentOut],
+    summary="Enrollment and paid revenue totals by instructor and course (Admin only)",
+)
+def list_instructor_enrollments(
+    instructor_id: Optional[UUID] = Query(None),
+    course_id: Optional[UUID] = Query(None),
+    current_user: User = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    paid_payments = (
+        db.query(
+            Payment.user_id.label("user_id"),
+            Payment.course_id.label("course_id"),
+            func.count(distinct(Payment.user_id)).label("paid_student_count"),
+            func.coalesce(func.sum(Payment.amount), 0).label("total_paid_amount"),
+            func.min(Payment.currency).label("currency"),
+        )
+        .filter(Payment.status == "paid")
+        .group_by(Payment.user_id, Payment.course_id)
+        .subquery()
+    )
+
+    query = (
+        db.query(
+            User.id.label("instructor_id"),
+            User.full_name.label("instructor_name"),
+            User.email.label("instructor_email"),
+            Course.id.label("course_id"),
+            Course.title.label("course_title"),
+            Course.price.label("course_price"),
+            func.count(distinct(case((Enrollment.status != "cancelled", Enrollment.id)))).label(
+                "enrollment_count"
+            ),
+            func.count(
+                distinct(
+                    case(
+                        (
+                            (Enrollment.status != "cancelled")
+                            & (paid_payments.c.user_id.isnot(None)),
+                            Enrollment.id,
+                        )
+                    )
+                )
+            ).label("paid_enrollment_count"),
+            func.coalesce(func.sum(paid_payments.c.total_paid_amount), 0).label(
+                "total_paid_amount"
+            ),
+            func.coalesce(func.min(paid_payments.c.currency), "INR").label("currency"),
+        )
+        .join(Course, Course.instructor_id == User.id)
+        .outerjoin(Enrollment, Enrollment.course_id == Course.id)
+        .outerjoin(
+            paid_payments,
+            (paid_payments.c.user_id == Enrollment.user_id)
+            & (paid_payments.c.course_id == Enrollment.course_id),
+        )
+        .filter(User.deleted_at.is_(None))
+        .group_by(
+            User.id,
+            User.full_name,
+            User.email,
+            Course.id,
+            Course.title,
+            Course.price,
+        )
+    )
+    if instructor_id:
+        query = query.filter(User.id == instructor_id)
+    if course_id:
+        query = query.filter(Course.id == course_id)
+
+    return [
+        AdminInstructorEnrollmentOut(
+            instructor_id=row.instructor_id,
+            instructor_name=row.instructor_name,
+            instructor_email=row.instructor_email,
+            course_id=row.course_id,
+            course_title=row.course_title,
+            course_price=row.course_price or 0,
+            currency=row.currency,
+            enrollment_count=row.enrollment_count or 0,
+            paid_enrollment_count=row.paid_enrollment_count or 0,
+            total_paid_amount=row.total_paid_amount or 0,
+        )
+        for row in query.order_by(User.full_name, Course.title).all()
+    ]
+
+
+@router.get(
+    "/enrollment-financials",
+    response_model=List[AdminEnrollmentFinancialOut],
+    summary="Student enrollment and payment details for refunds (Admin only)",
+)
+def list_enrollment_financials(
+    instructor_id: Optional[UUID] = Query(None),
+    course_id: Optional[UUID] = Query(None),
+    enrollment_status: Optional[str] = Query(None, description="active | completed | cancelled"),
+    search: Optional[str] = Query(None, description="Search student name or email"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    current_user: User = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    student = aliased(User)
+    instructor = aliased(User)
+    query = (
+        db.query(Enrollment, student, Course, instructor)
+        .join(student, student.id == Enrollment.user_id)
+        .join(Course, Course.id == Enrollment.course_id)
+        .join(instructor, instructor.id == Course.instructor_id)
+    )
+    if instructor_id:
+        query = query.filter(Course.instructor_id == instructor_id)
+    if course_id:
+        query = query.filter(Enrollment.course_id == course_id)
+    if enrollment_status:
+        query = query.filter(Enrollment.status == enrollment_status)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(student.full_name.ilike(like) | student.email.ilike(like))
+
+    enrollment_rows = (
+        query.order_by(Enrollment.enrolled_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    if not enrollment_rows:
+        return []
+
+    enrollment_keys = [
+        (enrollment.user_id, enrollment.course_id)
+        for enrollment, _, _, _ in enrollment_rows
+    ]
+    payments = (
+        db.query(Payment)
+        .filter(
+            Payment.status.in_(["created", "paid", "failed"]),
+            tuple_(Payment.user_id, Payment.course_id).in_(enrollment_keys),
+        )
+        .order_by(Payment.created_at.desc())
+        .all()
+    )
+    payments_by_key = {}
+    for payment in payments:
+        payments_by_key.setdefault((payment.user_id, payment.course_id), []).append(payment)
+
+    result = []
+    for enrollment, student, course, instructor in enrollment_rows:
+        course_payments = payments_by_key.get((student.id, course.id), [])
+        result.append(
+            AdminEnrollmentFinancialOut(
+                enrollment_id=enrollment.id,
+                enrolled_at=enrollment.enrolled_at,
+                completed_at=enrollment.completed_at,
+                enrollment_status=enrollment.status,
+                student_id=student.id,
+                student_name=student.full_name,
+                student_email=student.email,
+                course_id=course.id,
+                course_title=course.title,
+                instructor_id=course.instructor_id,
+                instructor_name=instructor.full_name,
+                course_price=course.price or 0,
+                payments=[
+                    AdminPaymentOut(
+                        id=payment.id,
+                        amount=payment.amount,
+                        currency=payment.currency,
+                        status=payment.status,
+                        razorpay_order_id=payment.razorpay_order_id,
+                        razorpay_payment_id=payment.razorpay_payment_id,
+                        created_at=payment.created_at,
+                    )
+                    for payment in course_payments
+                ],
+            )
+        )
+    return result
 
 
 @router.post(

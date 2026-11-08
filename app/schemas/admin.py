@@ -1,6 +1,7 @@
 # app/schemas/admin.py
 from datetime import datetime
-from typing import Dict, Optional
+from decimal import Decimal
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -80,3 +81,42 @@ class DeleteUserOut(BaseModel):
 
 class DeleteCourseOut(BaseModel):
     archived: bool  # True = soft-deleted (had enrollments or payments), False = removed
+
+
+class AdminInstructorEnrollmentOut(BaseModel):
+    instructor_id: UUID
+    instructor_name: str
+    instructor_email: str
+    course_id: UUID
+    course_title: str
+    course_price: Decimal
+    currency: str
+    enrollment_count: int
+    paid_enrollment_count: int
+    total_paid_amount: Decimal
+
+
+class AdminPaymentOut(BaseModel):
+    id: UUID
+    amount: Decimal
+    currency: str
+    status: str
+    razorpay_order_id: str
+    razorpay_payment_id: Optional[str] = None
+    created_at: datetime
+
+
+class AdminEnrollmentFinancialOut(BaseModel):
+    enrollment_id: UUID
+    enrolled_at: datetime
+    completed_at: Optional[datetime] = None
+    enrollment_status: str
+    student_id: UUID
+    student_name: str
+    student_email: str
+    course_id: UUID
+    course_title: str
+    instructor_id: UUID
+    instructor_name: str
+    course_price: Decimal
+    payments: List[AdminPaymentOut]

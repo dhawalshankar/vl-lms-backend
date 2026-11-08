@@ -76,6 +76,17 @@ The API is mounted under `/api/v1`. The available route groups are:
 | `/careers` | Job postings and applications |
 | `/admin` | Administrative operations and analytics |
 
+Admin enrollment reporting endpoints (all require an admin bearer token):
+
+- `GET /api/v1/admin/instructor-enrollments` returns one row per instructor/course with
+  enrollment count, paid enrollment count, course price, currency, and total paid amount.
+  Optional filters: `instructor_id` and `course_id`.
+- `GET /api/v1/admin/enrollment-financials` returns each enrollment with student identity,
+  enrollment status/date, instructor/course information, and all related Razorpay payment
+  records (`razorpay_order_id`, `razorpay_payment_id`, amount, currency, and status). Use
+  `instructor_id`, `course_id`, `enrollment_status`, `search`, `skip`, and `limit` filters
+  for refund investigation and pagination.
+
 Interactive API documentation is generated from the application:
 
 - Swagger UI: `http://localhost:8000/docs`
