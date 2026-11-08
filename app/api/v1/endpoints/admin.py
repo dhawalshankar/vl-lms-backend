@@ -11,7 +11,7 @@ from app.api.deps import require_role
 from app.api.v1.endpoints.courses import create_course_record, get_course_detail, mark_published
 from app.core.database import get_db
 from app.models.course import Course, Lesson, Module
-from app.models.enrollment import Enrollment
+from app.models.enrollment import Enrollment, LessonProgress
 from app.models.payment import Payment
 from app.models.user import User
 from app.schemas.admin import (
