@@ -305,3 +305,17 @@ and Google Cloud project limits apply.
 Never commit `.env` or production secrets. Use `.env.example` as the template
 for local configuration. The playlist importer does not require a database migration;
 it uses the existing course, module, and lesson tables.
+
+## Production topology
+
+The LMS API is deployed independently from the Next.js LMS frontend:
+
+- Frontend: Vercel at `https://learn.vartalang.in`
+- API: Render service consumed through the frontend's `NEXT_PUBLIC_API_URL`
+- Main platform: separate VartaLang frontend/backend services
+
+The LMS participates in the wider VartaLang ecosystem through shared SSO identity
+exchange, while retaining its own PostgreSQL data model for courses, enrollments,
+progress, payments, instructors, and administrative reporting. The API also
+integrates Razorpay for payments and Google Cloud YouTube Data API v3 for the
+admin-only playlist importer.
