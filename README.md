@@ -12,6 +12,7 @@ with Python, FastAPI, SQLAlchemy, PostgreSQL, and Alembic.
 - VartaLang SSO code exchange and JWT-based LMS sessions
 - User profiles, login tracking, and daily learning streaks
 - Course catalog, curriculum management, enrollments, and lesson progress
+- Admin YouTube playlist importing into free draft courses
 - Instructor profiles and course publishing workflows
 - Practice labs and evaluation submissions
 - Challenges and leaderboards
@@ -75,6 +76,44 @@ The API is mounted under `/api/v1`. The available route groups are:
 | `/articles` | Articles and blog content |
 | `/careers` | Job postings and applications |
 | `/admin` | Administrative operations and analytics |
+
+### YouTube playlist course importer
+
+Admins can import a public YouTube playlist as a free draft course:
+
+```text
+POST /api/v1/admin/courses/import-youtube-playlist
+Authorization: Bearer <admin-access-token>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "playlist_url": "https://www.youtube.com/playlist?list=PLAYLIST_ID",
+  "instructor_id": "<instructor UUID>",
+  "language": "Hindi",
+  "title": "Optional course title",
+  "description": "Optional course description",
+  "level": "foundation",
+  "category": "conversation"
+}
+```
+
+The endpoint validates that the caller is an admin and that the selected user is an
+active instructor. It reads public playlist metadata and playlist items through the
+YouTube Data API, then creates:
+
+- A zero-price course in `draft` status
+- One module per public playlist video
+- One lesson per module with the YouTube video ID
+- The first lesson marked as a preview
+
+The importer is capped at the first 500 public videos in a playlist. Private and deleted
+videos are skipped. The API stores only playlist/video metadata and IDs; it does not
+download or copy YouTube media. The response includes the created course ID, title,
+language, module count, lesson count, and draft status.
 
 Instructor sales reporting:
 
@@ -255,6 +294,14 @@ The supported settings are defined in `app/core/config.py` and include:
 - `JWT_SECRET`, `JWT_ALGORITHM`, and `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `VARTALANG_MAIN_AUTH_URL` and `SSO_SHARED_SECRET`
 - `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`
+- `YOUTUBE_API_KEY` (server-only YouTube Data API v3 key for admin playlist imports)
+
+`YOUTUBE_API_KEY` is optional for the rest of the LMS, but importing playlists returns
+a configuration error until it is set. Create the key in Google Cloud with YouTube Data
+API v3 enabled and restrict the key to that API. Keep the key in the backend `.env` only;
+never expose it through the frontend or commit it to source control. YouTube API quota
+and Google Cloud project limits apply.
 
 Never commit `.env` or production secrets. Use `.env.example` as the template
-for local configuration.
+for local configuration. The playlist importer does not require a database migration;
+it uses the existing course, module, and lesson tables.
