@@ -2,7 +2,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, distinct, func, tuple_
 from sqlalchemy.orm import Session, aliased
@@ -27,8 +29,11 @@ from app.schemas.admin import (
     DeleteCourseOut,
     DeleteUserOut,
     UserStatusUpdate,
+    YouTubePlaylistImportIn,
+    YouTubePlaylistImportOut,
 )
-from app.schemas.course import CourseDetailOut
+from app.schemas.course import CourseCreate, CourseDetailOut
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -501,6 +506,130 @@ def create_course_for_instructor(
         managed_by_admin=True,
     )
     return get_course_detail(course_id=course.id, current_user=current_user, db=db)
+
+
+def _youtube_playlist_id(value: str) -> str:
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or parsed.netloc not in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        raise HTTPException(status_code=422, detail="Enter a valid YouTube playlist URL.")
+    playlist_id = parse_qs(parsed.query).get("list", [None])[0]
+    if not playlist_id or len(playlist_id) > 100:
+        raise HTTPException(status_code=422, detail="The YouTube URL does not contain a playlist.")
+    return playlist_id
+
+
+def _youtube_get(path: str, params: dict) -> dict:
+    if not settings.YOUTUBE_API_KEY:
+        raise HTTPException(status_code=503, detail="YouTube playlist import is not configured. Add YOUTUBE_API_KEY to the backend environment.")
+    try:
+        response = httpx.get(
+            f"https://www.googleapis.com/youtube/v3/{path}",
+            params={**params, "key": settings.YOUTUBE_API_KEY},
+            timeout=15,
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail="Could not reach YouTube.") from exc
+    if response.status_code != 200:
+        detail = response.json().get("error", {}).get("message", "YouTube rejected the playlist request.")
+        raise HTTPException(status_code=502, detail=detail)
+    return response.json()
+
+
+@router.post(
+    "/courses/import-youtube-playlist",
+    response_model=YouTubePlaylistImportOut,
+    status_code=201,
+    summary="Import a public YouTube playlist as a free draft course (Admin only)",
+)
+def import_youtube_playlist(
+    payload: YouTubePlaylistImportIn,
+    current_user: User = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    instructor = db.get(User, payload.instructor_id)
+    if not instructor or instructor.deleted_at or instructor.role != "instructor":
+        raise HTTPException(status_code=404, detail="Instructor not found")
+
+    playlist_id = _youtube_playlist_id(payload.playlist_url)
+    playlist_data = _youtube_get("playlists", {"part": "snippet", "id": playlist_id})
+    playlist = (playlist_data.get("items") or [None])[0]
+    if not playlist:
+        raise HTTPException(status_code=404, detail="YouTube playlist not found or not public.")
+
+    videos: list[dict] = []
+    next_page: Optional[str] = None
+    while True:
+        page = _youtube_get(
+            "playlistItems",
+            {
+                "part": "snippet",
+                "playlistId": playlist_id,
+                "maxResults": 50,
+                **({"pageToken": next_page} if next_page else {}),
+            },
+        )
+        for item in page.get("items", []):
+            snippet = item.get("snippet", {})
+            video_id = snippet.get("resourceId", {}).get("videoId")
+            title = (snippet.get("title") or "").strip()
+            if video_id and title and title != "Private video" and title != "Deleted video":
+                videos.append({"id": video_id, "title": title})
+        next_page = page.get("nextPageToken")
+        if not next_page or len(videos) >= 500:
+            break
+
+    if not videos:
+        raise HTTPException(status_code=422, detail="The playlist has no public videos to import.")
+
+    course_title = payload.title or playlist["snippet"].get("title", "YouTube Language Course")
+    course = create_course_record(
+        db,
+        CourseCreate(
+            title=course_title[:150],
+            description=payload.description or f"Free lessons imported from the public YouTube playlist: {course_title}.",
+            language=payload.language,
+            level=payload.level,
+            category=payload.category,
+            duration=f"{len(videos)} lessons",
+            price=0,
+            tags=["YouTube", "playlist", payload.language],
+            modules=0,
+        ),
+        instructor_id=instructor.id,
+        status_value="draft",
+        created_by=current_user.id,
+        managed_by_admin=True,
+    )
+
+    for index, video in enumerate(videos, start=1):
+        module = Module(
+            course_id=course.id,
+            title=video["title"][:150],
+            description="Imported from the YouTube playlist.",
+            order_index=index,
+        )
+        db.add(module)
+        db.flush()
+        db.add(
+            Lesson(
+                module_id=module.id,
+                title=video["title"][:150],
+                description="YouTube lesson imported from the public playlist.",
+                youtube_video_id=video["id"],
+                order_index=1,
+                is_preview=index == 1,
+            )
+        )
+    db.commit()
+
+    return YouTubePlaylistImportOut(
+        id=course.id,
+        title=course.title,
+        language=course.language,
+        lessons_imported=len(videos),
+        modules_imported=len(videos),
+        status=course.status,
+    )
 
 
 @router.post(

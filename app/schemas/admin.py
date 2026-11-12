@@ -67,6 +67,25 @@ class AdminCourseCreate(CourseCreate):
     publish: bool = False  # True = publish immediately (the admin is the approver)
 
 
+class YouTubePlaylistImportIn(BaseModel):
+    playlist_url: str = Field(..., min_length=1, max_length=500)
+    instructor_id: UUID
+    language: str = Field(..., min_length=2, max_length=50)
+    title: Optional[str] = Field(None, min_length=3, max_length=150)
+    description: Optional[str] = Field(None, max_length=5000)
+    level: str = Field("foundation", max_length=30)
+    category: str = Field("conversation", max_length=50)
+
+
+class YouTubePlaylistImportOut(BaseModel):
+    id: UUID
+    title: str
+    language: str
+    lessons_imported: int
+    modules_imported: int
+    status: str
+
+
 class CourseRejectIn(BaseModel):
     reason: str = Field(..., min_length=3, max_length=1000)
 
